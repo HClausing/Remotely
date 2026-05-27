@@ -1,0 +1,242 @@
+@page "/devices-mud"
+@using MudBlazor
+@using Remotely.Shared.Entities
+@using Remotely.Server.Services
+@attribute [Authorize]
+@inherits AuthComponentBase
+
+@inject IMudBlazorDeviceService DeviceService
+@inject IToastService ToastService
+@inject NavigationManager Nav
+
+<PageTitle>Dispositivos - Remotely</PageTitle>
+
+<MudContainer MaxWidth="MaxWidth.Large" Class="my-16">
+    <div class="mb-6">
+        <MudText Typo="Typo.h3" GutterBottom="true">Meus Dispositivos</MudText>
+        <MudText Typo="Typo.body1">Gerenciar e controlar seus dispositivos</MudText>
+    </div>
+
+    @if (_isLoading)
+    {
+        <MudProgressLinear Indeterminate="true" Class="mb-4" />
+        <MudSkeleton SkeletonType="SkeletonType.Rectangle" Height="400px" />
+    }
+    else if (_devices.Any())
+    {
+        <MudDataGrid Items="@_devices" 
+                    Hover="true" 
+                    Filterable="true"
+                    @ref="_grid"
+                    FixedHeader="true"
+                    Height="600px"
+                    Dense="false"
+                    Bordered="true"
+                    Striped="true">
+            <Columns>
+                <PropertyColumn Property="x => x.ID" 
+                               Title="ID" 
+                               Filterable="true"
+                               Sortable="true"
+                               Style="width: 20%"
+                               Filter="@_filterByID">
+                    <FilterTemplate>
+                        <MudTextField @bind-Value="_filterByID" 
+                                     Placeholder="Filtrar ID" 
+                                     Adornment="Adornment.Start"
+                                     AdornmentIcon="@Icons.Material.Filled.Search"
+                                     IconSize="Size.Small" />
+                    </FilterTemplate>
+                </PropertyColumn>
+
+                <PropertyColumn Property="x => x.Alias" 
+                               Title="Alias" 
+                               Filterable="true"
+                               Sortable="true"
+                               Style="width: 20%"
+                               Filter="@_filterByAlias">
+                    <FilterTemplate>
+                        <MudTextField @bind-Value="_filterByAlias" 
+                                     Placeholder="Filtrar Alias" 
+                                     Adornment="Adornment.Start"
+                                     AdornmentIcon="@Icons.Material.Filled.Search"
+                                     IconSize="Size.Small" />
+                    </FilterTemplate>
+                </PropertyColumn>
+
+                <PropertyColumn Property="x => x.DeviceName" 
+                               Title="Nome do Dispositivo" 
+                               Filterable="true"
+                               Sortable="true"
+                               Style="width: 25%"
+                               Filter="@_filterByName">
+                    <FilterTemplate>
+                        <MudTextField @bind-Value="_filterByName" 
+                                     Placeholder="Filtrar Nome" 
+                                     Adornment="Adornment.Start"
+                                     AdornmentIcon="@Icons.Material.Filled.Search"
+                                     IconSize="Size.Small" />
+                    </FilterTemplate>
+                </PropertyColumn>
+
+                <PropertyColumn Property="x => x.IsOnline" 
+                               Title="Status" 
+                               Sortable="true"
+                               Style="width: 15%">
+                    <CellTemplate>
+                        @if (context.Item.IsOnline)
+                        {
+                            <MudChip Icon="@Icons.Material.Filled.Circle" 
+                                    Color="Color.Success" 
+                                    Size="Size.Small">
+                                Online
+                            </MudChip>
+                        }
+                        else
+                        {
+                            <MudChip Icon="@Icons.Material.Filled.Circle" 
+                                    Color="Color.Error" 
+                                    Size="Size.Small">
+                                Offline
+                            </MudChip>
+                        }
+                    </CellTemplate>
+                </PropertyColumn>
+
+                <TemplateColumn Title="Ações" 
+                               Style="width: 20%; text-align: center;"
+                               Sortable="false"
+                               Filterable="false">
+                    <CellTemplate>
+                        <MudButton Variant="Variant.Filled" 
+                                  Color="Color.Primary"
+                                  Size="Size.Small"
+                                  Disabled="!context.Item.IsOnline"
+                                  @onclick="@(() => ConnectToDevice(context.Item))">
+                            Conectar
+                        </MudButton>
+                        <MudButton Variant="Variant.Text" 
+                                  Color="Color.Default"
+                                  Size="Size.Small"
+                                  @onclick="@(() => ViewDetails(context.Item))">
+                            Detalhes
+                        </MudButton>
+                    </CellTemplate>
+                </TemplateColumn>
+            </Columns>
+
+            <PagerContent>
+                <MudDataGridPager T="Device" 
+                                 PageSizeOptions="new int[] { 5, 10, 25, 50, 100 }" />
+            </PagerContent>
+
+            <NoRecordsContent>
+                <MudAlert Severity="Info" Dense="true">
+                    Nenhum dispositivo encontrado com os filtros aplicados.
+                </MudAlert>
+            </NoRecordsContent>
+        </MudDataGrid>
+    }
+    else
+    {
+        <MudAlert Severity="Info">
+            <MudIcon Icon="@Icons.Material.Filled.Info" Class="mr-2" />
+            Nenhum dispositivo registrado. Instale um agente para começar.
+        </MudAlert>
+    }
+
+    <MudDivider Class="my-4" />
+
+    <div class="d-flex gap-2">
+        <MudButton Variant="Variant.Filled" 
+                  Color="Color.Primary"
+                  StartIcon="@Icons.Material.Filled.Refresh"
+                  @onclick="LoadDevices">
+            Atualizar
+        </MudButton>
+        <MudButton Variant="Variant.Outlined" 
+                  Color="Color.Default"
+                  StartIcon="@Icons.Material.Filled.Download"
+                  Href="/deploy">
+            Instalar Agente
+        </MudButton>
+    </div>
+</MudContainer>
+
+@code {
+    private List<Device> _devices = new();
+    private List<Device> _filteredDevices = new();
+    private bool _isLoading = true;
+    private MudDataGrid<Device> _grid = new();
+
+    // Filtros
+    private string _filterByID = string.Empty;
+    private string _filterByAlias = string.Empty;
+    private string _filterByName = string.Empty;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await base.OnInitializedAsync();
+        await LoadDevices();
+    }
+
+    private async Task LoadDevices()
+    {
+        _isLoading = true;
+        try
+        {
+            _devices = await DeviceService.GetDevicesAsync();
+            _filteredDevices = _devices;
+        }
+        catch (Exception ex)
+        {
+            ToastService.ShowToast2($"Erro ao carregar dispositivos: {ex.Message}", 
+                                   Enums.ToastType.Error);
+            _devices = new List<Device>();
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    // Função de filtro para ID
+    private Func<Device, bool> _filterByID_func => x =>
+    {
+        if (string.IsNullOrWhiteSpace(_filterByID))
+            return true;
+        return x.ID.Contains(_filterByID, StringComparison.OrdinalIgnoreCase);
+    };
+
+    // Função de filtro para Alias
+    private Func<Device, bool> _filterByAlias_func => x =>
+    {
+        if (string.IsNullOrWhiteSpace(_filterByAlias))
+            return true;
+        return (x.Alias ?? "").Contains(_filterByAlias, StringComparison.OrdinalIgnoreCase);
+    };
+
+    // Função de filtro para Nome
+    private Func<Device, bool> _filterByName_func => x =>
+    {
+        if (string.IsNullOrWhiteSpace(_filterByName))
+            return true;
+        return x.DeviceName.Contains(_filterByName, StringComparison.OrdinalIgnoreCase);
+    };
+
+    private void ConnectToDevice(Device device)
+    {
+        if (!device.IsOnline)
+        {
+            ToastService.ShowToast2("Dispositivo está offline", Enums.ToastType.Warning);
+            return;
+        }
+
+        Nav.NavigateTo($"/remote-control/{device.ID}");
+    }
+
+    private void ViewDetails(Device device)
+    {
+        Nav.NavigateTo($"/device-details/{device.ID}");
+    }
+}
